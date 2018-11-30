@@ -76,12 +76,16 @@ func (view *ViewInfo) Copy() (newView *ViewInfo) {
 
 var chuckSize = 2 * 1024 * 1024
 
-func getHashFromReader(reader io.Reader) uint64 {
+func getHashFromReader(reader io.Reader) (uint64, uint64) {
 	h := xxhash.New()
 
 	buf := make([]byte, chuckSize)
+	var bytesRead uint64
+
+	bytesRead = 0
 	for {
 		n, err := reader.Read(buf)
+		bytesRead += uint64(n)
 		if err != nil && err != io.EOF {
 			logrus.Panic(err)
 		}
@@ -92,7 +96,7 @@ func getHashFromReader(reader io.Reader) uint64 {
 		h.Write(buf[:n])
 	}
 
-	return h.Sum64()
+	return h.Sum64(), bytesRead
 }
 
 // NewFileInfo extracts the metadata from a tar header and file contents and generates a new FileInfo object.
@@ -106,8 +110,13 @@ func NewFileInfo(reader *tar.Reader, header *tar.Header, path string) FileInfo {
 		}
 	}
 
-	hash := getHashFromReader(reader)
+	fmt.Printf("Reading %v(%v)...\n", path, header.Size)
+	hash, bytesRead := getHashFromReader(reader)
+	if bytesRead != uint64(header.Size) {
+		fmt.Printf("NewFileInfo: Not enough bytes in '%v': %v (%v expected)\n", path, bytesRead, header.Size)
 
+		logrus.Panic()
+	}
 	return FileInfo{
 		Path:      path,
 		TypeFlag:  header.Typeflag,

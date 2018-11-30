@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/sirupsen/logrus"
 
 	"github.com/docker/docker/client"
@@ -196,19 +197,24 @@ func InitializeData(imageID string) ([]*Layer, []*filetree.FileTree, float64, fi
 			if strings.HasSuffix(name, "layer.tar") {
 				currentLayer++
 				if err != nil {
+					fmt.Println("Problem in InitializeData", err)
 					logrus.Panic(err)
 				}
 				message := fmt.Sprintf("    ├─ %s %s ", layerProgress, "working...")
 				fmt.Printf("\r%s", message)
 
-				layerReader := tar.NewReader(tarReader)
-				processLayerTar(layerMap, name, layerReader, layerProgress)
+				processLayerTar(layerMap, name, tarReader, layerProgress)
 			} else if strings.HasSuffix(name, ".json") {
+				fmt.Printf("Reading %v(%v)...\n", name, header.Size)
 				var fileBuffer = make([]byte, header.Size)
 				n, err = tarReader.Read(fileBuffer)
-				if err != nil && err != io.EOF && int64(n) != header.Size {
 				if err != nil && err != io.EOF || int64(n) != header.Size {
 					logrus.Panic(err)
+				}
+				if int64(n) != header.Size {
+					fmt.Printf("Not enough bytes in '%v': %v (%v expected)\n", name, n, header.Size)
+
+					logrus.Panic()
 				}
 				jsonFiles[name] = fileBuffer
 			}
@@ -216,6 +222,7 @@ func InitializeData(imageID string) ([]*Layer, []*filetree.FileTree, float64, fi
 	}
 
 	manifest := NewImageManifest(jsonFiles["manifest.json"])
+	spew.Dump(manifest.ConfigPath, jsonFiles[manifest.ConfigPath])
 	config := NewImageConfig(jsonFiles[manifest.ConfigPath])
 
 	// build the content tree
@@ -266,15 +273,13 @@ func getImageReader(imageID string) (io.ReadCloser, int64) {
 		utils.Exit(1)
 	}
 
-
 	fmt.Println("  Fetching metadata...")
 
 	result, _, err := dockerClient.ImageInspectWithRaw(ctx, imageID)
 	check(err)
 	totalSize := result.Size
 
-
-	fmt.Println( "  Fetching image...")
+	fmt.Println("  Fetching image...")
 
 	readCloser, err := dockerClient.ImageSave(ctx, []string{imageID})
 	check(err)
@@ -285,15 +290,17 @@ func getImageReader(imageID string) (io.ReadCloser, int64) {
 func getFileList(tarReader *tar.Reader) []filetree.FileInfo {
 	var files []filetree.FileInfo
 
+	layerReader := tar.NewReader(tarReader)
+
 	for {
-		header, err := tarReader.Next()
+		header, err := layerReader.Next()
 
 		if err == io.EOF {
 			break
 		}
 
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println("Problem in getFileList", err)
 			utils.Exit(1)
 		}
 
@@ -305,7 +312,7 @@ func getFileList(tarReader *tar.Reader) []filetree.FileInfo {
 		case tar.TypeXHeader:
 			fmt.Printf("ERRG: XHeader: %v: %s\n", header.Typeflag, name)
 		default:
-			files = append(files, filetree.NewFileInfo(tarReader, header, name))
+			files = append(files, filetree.NewFileInfo(layerReader, header, name))
 		}
 	}
 	return files
